@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#ffffff">
+    <title>后门小吃出品手册</title>
+    <link rel="stylesheet" href="assets/css/style.css?v=20260401-v003">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🍜 后门小吃出品手册</h1>
+            <p>标准化出品，品质保证</p>
+            <p id="versionText" style="margin-top:10px; opacity:0.9; font-size: 0.95em;">版本：<span id="versionNumber">20260401-v003</span></p>
+            <div class="user-info" onclick="toggleUserMenu()">
+                <span id="userStatus">👤 访客</span>
+            </div>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="tab-btn active" onclick="switchTab('recipes', this)">📖 菜品查询</button>
+            <button class="tab-btn" onclick="switchTab('admin', this)" id="adminTab" style="display:none;">⚙️ 管理后台</button>
+            <button class="tab-btn" onclick="switchTab('login', this)">🔐 管理员登录</button>
+        </div>
+
+        <div class="content">
+            <!-- 菜品查询页面 -->
+            <div id="recipes" class="tab-content active">
+                <div class="search-bar">
+                    <input type="text" class="search-input" id="searchInput" placeholder="搜索菜品名称..." onkeyup="searchRecipes()">
+                    <button class="search-btn" onclick="searchRecipes()">搜索</button>
+                </div>
+                <div class="recipe-grid" id="recipeGrid"></div>
+            </div>
+
+            <!-- 管理后台 -->
+            <div id="admin" class="tab-content">
+                <!-- 管理子标签 -->
+                <div class="admin-sub-tabs">
+                    <button class="sub-tab-btn active" onclick="switchAdminSub('list', this)">📋 菜品列表</button>
+                    <button class="sub-tab-btn" onclick="switchAdminSub('form', this)" id="subTabForm">➕ 添加菜品</button>
+                    <button class="sub-tab-btn" onclick="switchAdminSub('categories', this)">🏷️ 分类管理</button>
+                </div>
+
+                <!-- 子页：菜品列表 -->
+                <div id="adminSub-list" class="admin-sub-content active">
+                    <div class="admin-list-header">
+                        <input type="text" class="search-input admin-search" id="adminSearchInput" placeholder="搜索菜品..." onkeyup="filterAdminList()">
+                        <button class="btn btn-primary btn-compact" onclick="switchAdminSub('form'); resetForm();">➕ 新增</button>
+                    </div>
+                    <div id="adminRecipeList"></div>
+                </div>
+
+                <!-- 子页：添加/编辑菜品 -->
+                <div id="adminSub-form" class="admin-sub-content">
+                    <div class="admin-form">
+                        <div class="form-title-row">
+                            <h2 id="formTitle">添加新菜品</h2>
+                            <button class="btn btn-back" onclick="switchAdminSub('list')">← 返回列表</button>
+                        </div>
+                        <div id="adminMessage"></div>
+                        
+                        <div class="form-group">
+                            <label>菜品名称 *</label>
+                            <input type="text" class="form-control" id="recipeName" placeholder="例如：招牌红烧牛肉面">
+                        </div>
+
+                        <div class="form-group">
+                            <label>菜品分类</label>
+                            <select class="form-control" id="recipeCategory">
+                                <option value="主食">主食</option>
+                                <option value="小菜">小菜</option>
+                                <option value="汤品">汤品</option>
+                                <option value="饮品">饮品</option>
+                                <option value="特色菜">特色菜</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>出品图片URL（可选）</label>
+                            <input type="text" class="form-control" id="recipeImage" placeholder="输入图片链接地址">
+                        </div>
+
+                        <div class="form-group">
+                            <label>原材料配方</label>
+                            <div id="ingredientsList">
+                                <div class="ingredient-input-group" draggable="true" data-ingredient-item="true">
+                                    <span class="drag-handle">⋮⋮</span>
+                                    <input type="text" class="form-control" placeholder="材料名称">
+                                    <input type="text" class="form-control" placeholder="用量（如：200克）">
+                                    <button class="btn btn-remove" onclick="removeIngredient(this)">删除</button>
+                                </div>
+                            </div>
+                            <button class="btn btn-add" onclick="addIngredient()">+ 添加材料</button>
+                        </div>
+
+                        <div class="form-group">
+                            <label>制作步骤（每行一个步骤，回车即分段）</label>
+                            <textarea class="form-control" id="stepsTextarea" placeholder="步骤1：详细描述制作过程...\n步骤2：...\n步骤3：..."></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>注意事项</label>
+                            <textarea class="form-control" id="recipeNotes" placeholder="特殊提醒、出品标准等..."></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>制作时间（分钟）</label>
+                            <input type="number" class="form-control" id="cookingTime" placeholder="15">
+                        </div>
+
+                        <div class="form-actions">
+                            <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">保存菜品</button>
+                            <button class="btn btn-cancel" id="cancelEditBtn" style="display:none;" onclick="cancelEdit()">取消编辑</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 子页：分类管理 -->
+                <div id="adminSub-categories" class="admin-sub-content">
+                    <div class="admin-form">
+                        <h2>分类管理</h2>
+                        <div id="categoryManager" style="margin-top:15px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 登录页面 -->
+            <div id="login" class="tab-content">
+                <div class="login-form">
+                    <h2>管理员登录</h2>
+                    <div class="form-group">
+                        <label>用户名</label>
+                        <input type="text" class="form-control" id="username" placeholder="请输入用户名">
+                    </div>
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input type="password" class="form-control" id="password" placeholder="请输入密码">
+                    </div>
+                    <button class="btn btn-primary" onclick="login()">登录</button>
+                    <div id="loginMessage" style="margin-top: 20px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 菜品详情模态框 -->
+    <div class="modal" id="recipeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">菜品名称</h2>
+                <p id="modalCategory">分类</p>
+                <button class="close-btn" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div id="modalImage" style="text-align: center; margin-bottom: 20px;"></div>
+                <div class="detail-section">
+                    <h3>📝 原材料清单</h3>
+                    <div class="ingredient-list" id="modalIngredients"></div>
+                </div>
+                <div class="detail-section">
+                    <h3>👨🍳 制作步骤</h3>
+                    <div class="step-list" id="modalSteps"></div>
+                </div>
+                <div class="detail-section" id="modalNotesSection">
+                    <h3>⚠️ 注意事项</h3>
+                    <p id="modalNotes"></p>
+                </div>
+                <div class="detail-section">
+                    <h3>⏱️ 制作时间</h3>
+                    <p id="modalTime"></p>
+                </div>
+                <div class="share-buttons">
+                    <button class="share-btn" onclick="copyRecipe()">复制</button>
+                    <button class="share-btn" onclick="printRecipe()">打印</button>
+                    <button class="share-btn" onclick="sendWecom()">企业微信</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="assets/js/app.js?v=20260401-v003"></script>
+</body>
+</html>
