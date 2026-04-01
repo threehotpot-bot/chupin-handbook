@@ -1,0 +1,1278 @@
+// 模拟数据库（实际应用中应该连接真实数据库）
+const API_BASE = '/api';
+const ADMIN_TOKEN = 'adminpassword';
+let recipes = JSON.parse(localStorage.getItem('recipes')) || [
+    {
+        id: 1,
+        name: '招牌红烧牛肉面',
+        category: '主食',
+        image: '',
+        ingredients: [
+            { name: '新鲜牛腱', amount: '500克' },
+            { name: '手工拉面', amount: '200克' },
+            { name: '生抽', amount: '30毫升' },
+            { name: '老抽', amount: '15毫升' },
+            { name: '冰糖', amount: '20克' },
+            { name: '八角', amount: '2个' },
+            { name: '桂皮', amount: '1块' },
+            { name: '青菜', amount: '100克' }
+        ],
+        steps: [
+            '将牛腱切成3厘米见方的块，冷水下锅焯水去血沫',
+            '热锅放油，下冰糖炒糖色，呈枣红色时加入牛肉块翻炒',
+            '加入生抽、老抽、八角、桂皮等香料，翻炒均匀',
+            '加入开水没过牛肉，大火烧开后转小火炖煮1.5小时',
+            '另起锅烧水，下入拉面煮3分钟至熟',
+            '青菜焯水30秒',
+            '面条装碗，浇上牛肉汤，摆上牛肉块和青菜即可'
+        ],
+        notes: '牛肉要选新鲜的，炖煮时间要足够，汤色要红亮',
+        cookingTime: 120
+    },
+    {
+        id: 2,
+        name: '清汤牛肉面',
+        category: '主食',
+        image: '',
+        ingredients: [
+            { name: '牛骨', amount: '1000克' },
+            { name: '牛肉', amount: '300克' },
+            { name: '拉面', amount: '200克' },
+            { name: '白萝卜', amount: '200克' },
+            { name: '香菜', amount: '20克' },
+            { name: '葱', amount: '30克' },
+            { name: '姜', amount: '20克' }
+        ],
+        steps: [
+            '牛骨冷水下锅焯水，去除血沫',
+            '将焯好的牛骨放入汤锅，加入葱姜和足量清水',
+            '大火烧开后转小火熬煮4小时',
+            '牛肉切薄片，白萝卜切片',
+            '面条煮熟装碗',
+            '浇上清汤，放上牛肉片和萝卜片',
+            '撒上香菜和葱花即可'
+        ],
+        notes: '汤要熬得清澈，不要有杂质',
+        cookingTime: 240
+    }
+];
+
+let isAdmin = false;
+let currentRecipe = null;
+let editingRecipeId = null;
+let wecomSending = false;
+const DRAFT_KEY_NEW_RECIPE = 'DRAFT_RECIPE_ADD';
+let pageScrollY = 0; // 记录打开弹窗时页面滚动位置
+
+// 将文本转义为安全的 HTML
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// 在步骤文本中高亮原材料并附上用量
+function highlightIngredientsInStep(stepText, ingredientsList) {
+    if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) {
+        return escapeHtml(stepText || '');
+    }
+    let safe = escapeHtml(stepText || '');
+    // 按名称长度倒序，避免“葱花/葱”这类包含关系导致重复替换
+    const sorted = [...ingredientsList].sort((a, b) => (b.name || '').length - (a.name || '').length);
+    sorted.forEach(ing => {
+        const name = (ing && ing.name) ? String(ing.name).trim() : '';
+        const amount = (ing && ing.amount) ? String(ing.amount).trim() : '';
+        if (!name) return;
+        // 构造全局正则；名称先进行安全转义
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(escaped, 'g');
+        const replacement = amount
+            ? `<span class=\"ing-highlight\">${name}</span><span class=\"ing-amount\">（${escapeHtml(amount)}）</span>`
+            : `<span class=\"ing-highlight\">${name}</span>`;
+        safe = safe.replace(pattern, replacement);
+    });
+    return safe;
+}
+
+// 在纯文本中为材料名附上用量（用于复制与企业微信文本）
+function annotateIngredientsInPlain(stepText, ingredientsList) {
+    if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) {
+        return String(stepText || '');
+    }
+    let plain = String(stepText || '');
+    const sorted = [...ingredientsList].sort((a, b) => (b.name || '').length - (a.name || '').length);
+    sorted.forEach(ing => {
+        const name = (ing && ing.name) ? String(ing.name).trim() : '';
+        const amount = (ing && ing.amount) ? String(ing.amount).trim() : '';
+        if (!name || !amount) return;
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(escaped, 'g');
+        plain = plain.replace(pattern, `${name}（${amount}）`);
+    });
+    return plain;
+}
+
+// 初始化页面
+function init() {
+    tryLoadFromApi().then(() => {
+        loadRecipes();
+    });
+    loadVersion();
+    checkAdminStatus();
+    // 初始化HTML模板中已有的配料项拖拽功能
+    initDragForExistingIngredients();
+}
+
+// 为HTML模板中已有的配料项初始化拖拽功能
+function initDragForExistingIngredients() {
+    const existingItems = document.querySelectorAll('#ingredientsList .ingredient-input-group[data-ingredient-item="true"]');
+    existingItems.forEach(item => {
+        if (!item.draggable) {
+            item.draggable = true;
+            item.addEventListener('dragstart', handleDragStart);
+            item.addEventListener('dragover', handleDragOver);
+            item.addEventListener('drop', handleDrop);
+            item.addEventListener('dragend', handleDragEnd);
+        }
+    });
+}
+// 尝试从服务端加载
+async function tryLoadFromApi() {
+    try {
+        const resp = await fetch(`${API_BASE}/recipes`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data && data.success && Array.isArray(data.data)) {
+            recipes = data.data;
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+        }
+        // 分类同时拉取
+        await fetchCategories();
+    } catch (e) {
+        // 静默失败，使用本地数据
+    }
+}
+
+// 加载前端版本号
+async function loadVersion() {
+    try {
+        // 追加时间戳彻底规避任何中间层/浏览器缓存
+        const resp = await fetch(`/version.json?v=${Date.now()}`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const version = data && data.version ? data.version : '';
+        const span = document.getElementById('versionNumber');
+        if (span && version) {
+            span.textContent = version;
+            return;
+        }
+        const el = document.getElementById('versionText');
+        if (el && version) el.textContent = `版本：${version}`;
+    } catch (e) {
+        // 忽略
+    }
+}
+
+// 检查管理员状态
+function checkAdminStatus() {
+    isAdmin = sessionStorage.getItem('isAdmin') === 'true';
+    document.getElementById('adminTab').style.display = isAdmin ? 'block' : 'none';
+    document.getElementById('userStatus').textContent = isAdmin ? '👨‍💼 管理员' : '👤 访客';
+    if (isAdmin) {
+        loadAdminRecipeList();
+        // 恢复草稿（仅在新增模式下）
+        setupAdminDraftPersistence();
+    }
+}
+
+// 切换标签页
+function switchTab(tabName, btn) {
+    // 如果未登录不能访问管理后台
+    if (tabName === 'admin' && !isAdmin) {
+        alert('请先登录管理员账号');
+        switchTab('login');
+        return;
+    }
+
+    // 隐藏所有标签页
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    // 移除所有按钮的active类
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    // 显示选中的标签页
+    document.getElementById(tabName).classList.add('active');
+    
+    // 设置对应按钮为active（避免直接用全局event）
+    if (btn && btn.classList) {
+        btn.classList.add('active');
+    } else {
+        const map = { recipes: 0, admin: 1, login: 2 };
+        const idx = map[tabName];
+        const buttons = document.querySelectorAll('.nav-tabs .tab-btn');
+        if (typeof idx === 'number' && buttons[idx]) {
+            buttons[idx].classList.add('active');
+        }
+    }
+
+    // 如果是管理后台，加载已有菜品列表
+    if (tabName === 'admin' && isAdmin) {
+        loadAdminRecipeList();
+        setupAdminDraftPersistence();
+        renderCategoryManager();
+    }
+}
+
+let categories = ['主食','小菜','汤品','饮品','特色菜'];
+
+async function fetchCategories() {
+    try {
+        const resp = await fetch(`${API_BASE}/categories`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data && data.success && Array.isArray(data.data)) {
+            categories = data.data;
+            renderCategoryOptions();
+        }
+    } catch (e) {}
+}
+
+function renderCategoryOptions() {
+    const sel = document.getElementById('recipeCategory');
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '';
+    categories.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c; opt.textContent = c;
+        sel.appendChild(opt);
+    });
+    if (current && categories.includes(current)) sel.value = current;
+}
+
+function renderCategoryManager() {
+    const box = document.getElementById('categoryManager');
+    if (!box) return;
+    // 渲染输入和列表
+    box.innerHTML = '';
+    const input = document.createElement('input');
+    input.type = 'text'; input.placeholder = '输入新分类名称'; input.className = 'form-control';
+    input.style.maxWidth = '240px';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-add'; addBtn.style.marginLeft = '10px'; addBtn.textContent = '添加分类';
+    addBtn.onclick = async () => {
+        const name = (input.value || '').trim();
+        if (!name) return alert('请输入分类名称');
+        const resp = await fetch(`${API_BASE}/categories`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+            body: JSON.stringify({ name })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data && data.success) {
+            categories = data.data || categories;
+            renderCategoryOptions();
+            renderCategoryManager();
+            input.value = '';
+        } else {
+            alert('添加失败');
+        }
+    };
+
+    const list = document.createElement('div');
+    list.style.marginTop = '10px';
+    categories.forEach(c => {
+        const item = document.createElement('div');
+        item.style.margin = '6px 0';
+        item.innerHTML = `<span style="margin-right:10px;">${c}</span>`;
+        const del = document.createElement('button');
+        del.className = 'btn btn-remove'; del.textContent = '删除'; del.style.padding = '4px 12px';
+        del.onclick = async () => {
+            if (!confirm(`删除分类“${c}”？`)) return;
+            const resp = await fetch(`${API_BASE}/categories/${encodeURIComponent(c)}`, {
+                method: 'DELETE', headers: { 'X-Admin-Token': ADMIN_TOKEN }
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok && data && data.success) {
+                categories = data.data || categories;
+                renderCategoryOptions();
+                renderCategoryManager();
+            } else {
+                alert('删除失败');
+            }
+        };
+        item.appendChild(del);
+        list.appendChild(item);
+    });
+
+    const row = document.createElement('div');
+    row.style.display = 'flex'; row.style.alignItems = 'center';
+    row.appendChild(input); row.appendChild(addBtn);
+    box.appendChild(row);
+    box.appendChild(list);
+}
+
+// 采集“新增菜品”表单数据
+function collectNewRecipeForm() {
+    const name = (document.getElementById('recipeName') || {}).value || '';
+    const category = (document.getElementById('recipeCategory') || {}).value || '主食';
+    const image = (document.getElementById('recipeImage') || {}).value || '';
+    const notes = (document.getElementById('recipeNotes') || {}).value || '';
+    const cookingTime = (document.getElementById('cookingTime') || {}).value || '';
+    const stepsTextareaEl = document.getElementById('stepsTextarea');
+    const stepsRaw = stepsTextareaEl && typeof stepsTextareaEl.value === 'string' ? stepsTextareaEl.value : '';
+    const ingredients = [];
+    const ingredientGroups = document.querySelectorAll('#ingredientsList .ingredient-input-group');
+    ingredientGroups.forEach(group => {
+        const inputs = group.querySelectorAll('input');
+        const n = inputs[0] ? inputs[0].value : '';
+        const a = inputs[1] ? inputs[1].value : '';
+        ingredients.push({ name: n, amount: a });
+    });
+    return { name, category, image, notes, cookingTime, stepsRaw, ingredients };
+}
+
+// 将草稿应用到表单（仅在未处于编辑模式时）
+function applyDraftToForm() {
+    if (editingRecipeId) return; // 编辑模式不回填草稿
+    try {
+        const raw = localStorage.getItem(DRAFT_KEY_NEW_RECIPE);
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (!draft || typeof draft !== 'object') return;
+        if (draft.name != null) (document.getElementById('recipeName') || {}).value = draft.name;
+        if (draft.category != null) (document.getElementById('recipeCategory') || {}).value = draft.category || '主食';
+        if (draft.image != null) (document.getElementById('recipeImage') || {}).value = draft.image;
+        if (draft.notes != null) (document.getElementById('recipeNotes') || {}).value = draft.notes;
+        if (draft.cookingTime != null) (document.getElementById('cookingTime') || {}).value = draft.cookingTime;
+        if (draft.stepsRaw != null) {
+            const el = document.getElementById('stepsTextarea');
+            if (el) el.value = draft.stepsRaw;
+        }
+        if (Array.isArray(draft.ingredients)) {
+            const ingContainer = document.getElementById('ingredientsList');
+            if (ingContainer) {
+                ingContainer.innerHTML = '';
+                if (draft.ingredients.length === 0) {
+                    addIngredient();
+                } else {
+                    draft.ingredients.forEach(ing => {
+                        const div = document.createElement('div');
+                        div.className = 'ingredient-input-group';
+                        div.draggable = true;
+                        div.setAttribute('data-ingredient-item', 'true');
+                        const nameEscaped = (ing.name || '').replace(/"/g, '&quot;');
+                        const amountEscaped = (ing.amount || '').replace(/"/g, '&quot;');
+                        div.innerHTML = `
+            <span class="drag-handle" style="cursor: move; color: #999; margin-right: 8px; user-select: none;">⋮⋮</span>
+            <input type="text" class="form-control" value="${nameEscaped}">
+            <input type="text" class="form-control" value="${amountEscaped}">
+            <button class="btn btn-remove" onclick="removeIngredient(this)">删除</button>
+        `;
+                        // 拖拽事件
+                        div.addEventListener('dragstart', handleDragStart);
+                        div.addEventListener('dragover', handleDragOver);
+                        div.addEventListener('drop', handleDrop);
+                        div.addEventListener('dragend', handleDragEnd);
+                        ingContainer.appendChild(div);
+                    });
+                }
+            }
+        }
+    } catch (e) {
+        // 忽略
+    }
+}
+
+function saveDraftFromForm() {
+    if (editingRecipeId) return; // 仅针对新增
+    try {
+        const data = collectNewRecipeForm();
+        localStorage.setItem(DRAFT_KEY_NEW_RECIPE, JSON.stringify(data));
+    } catch (e) {}
+}
+
+function clearNewRecipeDraft() {
+    try { localStorage.removeItem(DRAFT_KEY_NEW_RECIPE); } catch (e) {}
+}
+
+// 为新增表单绑定持久化
+function setupAdminDraftPersistence() {
+    // 回填一次（如果有草稿）
+    applyDraftToForm();
+    const adminTabEl = document.getElementById('admin');
+    if (!adminTabEl) return;
+    // 事件委托，监听整个管理区域的输入变化
+    adminTabEl.removeEventListener('input', saveDraftFromForm);
+    adminTabEl.addEventListener('input', saveDraftFromForm);
+    adminTabEl.removeEventListener('change', saveDraftFromForm);
+    adminTabEl.addEventListener('change', saveDraftFromForm);
+}
+
+// 登录功能
+function login() {
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const messageDiv = document.getElementById('loginMessage');
+
+    if (username === 'admin' && password === 'adminpassword') {
+        sessionStorage.setItem('isAdmin', 'true');
+        messageDiv.innerHTML = '<div class="success-message">登录成功！正在跳转...</div>';
+        setTimeout(() => {
+            checkAdminStatus();
+            switchTab('admin');
+            // 手动设置管理后台按钮为active
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById('adminTab').classList.add('active');
+        }, 1000);
+    } else {
+        messageDiv.innerHTML = '<div style="color: red;">用户名或密码错误</div>';
+    }
+}
+
+// 退出登录
+function toggleUserMenu() {
+    if (isAdmin) {
+        if (confirm('确定要退出登录吗？')) {
+            sessionStorage.removeItem('isAdmin');
+            checkAdminStatus();
+            location.reload();
+        }
+    }
+}
+
+// 加载菜品列表
+function loadRecipes() {
+    const grid = document.getElementById('recipeGrid');
+    grid.innerHTML = '';
+
+    recipes.forEach(recipe => {
+        const card = document.createElement('div');
+        card.className = 'recipe-card';
+        card.onclick = () => showRecipeDetail(recipe);
+
+        card.innerHTML = `
+            <div class="recipe-info">
+                <div class="recipe-name">${recipe.name}</div>
+                <div class="recipe-meta">
+                    <span class="recipe-category">${recipe.category}</span>
+                    <span>⏱️ ${recipe.cookingTime}分钟</span>
+                </div>
+            </div>
+        `;
+
+        grid.appendChild(card);
+    });
+}
+
+// 搜索菜品
+function searchRecipes() {
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const grid = document.getElementById('recipeGrid');
+    grid.innerHTML = '';
+
+    const filteredRecipes = recipes.filter(recipe => 
+        recipe.name.toLowerCase().includes(searchTerm) ||
+        recipe.category.toLowerCase().includes(searchTerm)
+    );
+
+    filteredRecipes.forEach(recipe => {
+        const card = document.createElement('div');
+        card.className = 'recipe-card';
+        card.onclick = () => showRecipeDetail(recipe);
+
+        card.innerHTML = `
+            <div class="recipe-info">
+                <div class="recipe-name">${recipe.name}</div>
+                <div class="recipe-meta">
+                    <span class="recipe-category">${recipe.category}</span>
+                    <span>⏱️ ${recipe.cookingTime}分钟</span>
+                </div>
+            </div>
+        `;
+
+        grid.appendChild(card);
+    });
+
+    if (filteredRecipes.length === 0) {
+        grid.innerHTML = '<div style="text-align: center; padding: 50px; color: #999;">没有找到相关菜品</div>';
+    }
+}
+
+// 显示菜品详情
+function showRecipeDetail(recipe) {
+    currentRecipe = recipe;
+    document.getElementById('modalTitle').textContent = recipe.name;
+    document.getElementById('modalCategory').textContent = recipe.category;
+    
+    // 显示图片
+    const imageDiv = document.getElementById('modalImage');
+    if (recipe.image) {
+        imageDiv.innerHTML = `<img src="${recipe.image}" alt="${recipe.name}" style="max-width: 100%; border-radius: 10px;">`;
+    } else {
+        imageDiv.innerHTML = '<div style="font-size: 5em;">🍜</div>';
+    }
+
+    // 显示配料
+    const ingredientsDiv = document.getElementById('modalIngredients');
+    ingredientsDiv.innerHTML = '';
+    recipe.ingredients.forEach(ing => {
+        ingredientsDiv.innerHTML += `
+            <div class="ingredient-item">
+                <span>${ing.name}</span>
+                <strong>${ing.amount}</strong>
+            </div>
+        `;
+    });
+
+    // 显示步骤
+    const stepsDiv = document.getElementById('modalSteps');
+    stepsDiv.innerHTML = '';
+    recipe.steps.forEach(step => {
+        const html = highlightIngredientsInStep(step, recipe.ingredients || []);
+        stepsDiv.innerHTML += `<div class="step-item">${html}</div>`;
+    });
+
+    // 显示注意事项
+    if (recipe.notes) {
+        document.getElementById('modalNotesSection').style.display = 'block';
+        document.getElementById('modalNotes').textContent = recipe.notes;
+    } else {
+        document.getElementById('modalNotesSection').style.display = 'none';
+    }
+
+    // 显示制作时间
+    document.getElementById('modalTime').textContent = `约 ${recipe.cookingTime} 分钟`;
+
+    // 显示模态框
+    document.getElementById('recipeModal').classList.add('active');
+    // 锁定背景滚动
+    try {
+        pageScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = `-${pageScrollY}px`;
+        document.body.classList.add('modal-open');
+    } catch (e) {}
+}
+
+// 关闭模态框
+function closeModal() {
+    document.getElementById('recipeModal').classList.remove('active');
+    // 解锁背景滚动并恢复位置
+    try {
+        document.body.classList.remove('modal-open');
+        const y = pageScrollY || 0;
+        document.body.style.top = '';
+        window.scrollTo(0, y);
+    } catch (e) {}
+}
+
+// 添加配料输入框
+function addIngredient() {
+    const container = document.getElementById('ingredientsList');
+    const div = document.createElement('div');
+    div.className = 'ingredient-input-group';
+    div.draggable = true;
+    div.setAttribute('data-ingredient-item', 'true');
+    div.innerHTML = `
+        <span class="drag-handle" style="cursor: move; color: #999; margin-right: 8px; user-select: none;">⋮⋮</span>
+        <input type="text" class="form-control" placeholder="材料名称">
+        <input type="text" class="form-control" placeholder="用量（如：200克）">
+        <button class="btn btn-remove" onclick="removeIngredient(this)">删除</button>
+    `;
+    // 拖拽事件
+    div.addEventListener('dragstart', handleDragStart);
+    div.addEventListener('dragover', handleDragOver);
+    div.addEventListener('drop', handleDrop);
+    div.addEventListener('dragend', handleDragEnd);
+    container.appendChild(div);
+}
+
+// 删除配料输入框
+function removeIngredient(btn) {
+    btn.parentElement.remove();
+}
+
+// 拖拽排序相关
+let draggedElement = null;
+
+function handleDragStart(e) {
+    draggedElement = this;
+    this.style.opacity = '0.5';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    if (this !== draggedElement && this.getAttribute('data-ingredient-item') === 'true') {
+        const rect = this.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+        if (e.clientY < midpoint) {
+            this.parentNode.insertBefore(draggedElement, this);
+        } else {
+            this.parentNode.insertBefore(draggedElement, this.nextSibling);
+        }
+    }
+    return false;
+}
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    return false;
+}
+
+function handleDragEnd(e) {
+    this.style.opacity = '1';
+    draggedElement = null;
+}
+
+// 添加步骤输入框
+function addStep() {
+    const container = document.getElementById('stepsList');
+    const stepCount = container.children.length + 1;
+    const div = document.createElement('div');
+    div.className = 'step-input-group';
+    div.style.marginBottom = '10px';
+    div.innerHTML = `
+        <textarea class="form-control" placeholder="步骤${stepCount}：详细描述制作过程..."></textarea>
+        <button class="btn btn-remove" style="margin-top: 5px;" onclick="removeStep(this)">删除步骤</button>
+    `;
+    container.appendChild(div);
+}
+
+// 删除步骤输入框
+function removeStep(btn) {
+    btn.parentElement.remove();
+}
+
+// 保存菜品
+function saveRecipe() {
+    const name = document.getElementById('recipeName').value;
+    const category = document.getElementById('recipeCategory').value;
+    const image = document.getElementById('recipeImage').value;
+    const notes = document.getElementById('recipeNotes').value;
+    const cookingTime = document.getElementById('cookingTime').value || 30;
+
+    if (!name) {
+        alert('请输入菜品名称');
+        return;
+    }
+
+    // 收集配料
+    const ingredients = [];
+    const ingredientGroups = document.querySelectorAll('#ingredientsList .ingredient-input-group');
+    ingredientGroups.forEach(group => {
+        const inputs = group.querySelectorAll('input');
+        if (inputs[0].value && inputs[1].value) {
+            ingredients.push({
+                name: inputs[0].value,
+                amount: inputs[1].value
+            });
+        }
+    });
+
+    // 收集步骤：优先从单一多行文本框按行拆分；为空时兼容旧结构(#stepsList textarea)
+    let steps = [];
+    const stepsTextareaEl = document.getElementById('stepsTextarea');
+    if (stepsTextareaEl && typeof stepsTextareaEl.value === 'string') {
+        const stepsRaw = stepsTextareaEl.value.split(/\r?\n/);
+        steps = stepsRaw.map(s => s.trim()).filter(s => s.length > 0);
+    }
+    // 兼容旧版本：如果仍为空，尝试从旧的多个 textarea 中读取
+    if (steps.length === 0) {
+        const legacyStepAreas = document.querySelectorAll('#stepsList textarea');
+        legacyStepAreas.forEach(area => {
+            const v = (area.value || '').trim();
+            if (v) steps.push(v);
+        });
+    }
+
+    if (ingredients.length === 0) {
+        alert('请至少添加一个配料');
+        return;
+    }
+
+    if (steps.length === 0) {
+        alert('请至少添加一个制作步骤');
+        return;
+    }
+
+    // 新增或更新分支
+    if (editingRecipeId) {
+        const updated = { id: editingRecipeId, name, category, image, ingredients, steps, notes, cookingTime: parseInt(cookingTime) };
+        if (isAdmin) {
+            fetch(`${API_BASE}/recipes/${editingRecipeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+                body: JSON.stringify(updated)
+            }).then(() => {
+                const idx = recipes.findIndex(r => r.id === editingRecipeId);
+                if (idx !== -1) recipes[idx] = updated;
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+                document.getElementById('adminMessage').innerHTML = '<div class="success-message">修改已保存！</div>';
+                cancelEdit();
+            }).catch(() => {
+                const idx = recipes.findIndex(r => r.id === editingRecipeId);
+                if (idx !== -1) recipes[idx] = updated;
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+                document.getElementById('adminMessage').innerHTML = '<div class="success-message">修改已保存（离线）</div>';
+                cancelEdit();
+            });
+        } else {
+            const idx = recipes.findIndex(r => r.id === editingRecipeId);
+            if (idx !== -1) recipes[idx] = updated;
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            loadRecipes();
+            loadAdminRecipeList();
+            document.getElementById('adminMessage').innerHTML = '<div class="success-message">修改已保存（本地）</div>';
+            cancelEdit();
+        }
+    } else {
+        const newRecipe = { id: Date.now(), name, category, image, ingredients, steps, notes, cookingTime: parseInt(cookingTime) };
+        if (isAdmin) {
+            fetch(`${API_BASE}/recipes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+                body: JSON.stringify(newRecipe)
+            }).then(async resp => {
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && data.success && data.data) {
+                        recipes.push(data.data);
+                    } else {
+                        recipes.push(newRecipe);
+                    }
+                    // 新增成功后清除草稿
+                    clearNewRecipeDraft();
+                } else {
+                    recipes.push(newRecipe);
+                }
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+            }).catch(() => {
+                recipes.push(newRecipe);
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+            });
+        } else {
+            recipes.push(newRecipe);
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            loadRecipes();
+            loadAdminRecipeList();
+        }
+    }
+
+    // 显示成功消息（仅新增时提示）
+    if (!editingRecipeId) {
+        document.getElementById('adminMessage').innerHTML = '<div class="success-message">菜品添加成功！</div>';
+    }
+    
+    // 清空表单
+    document.getElementById('recipeName').value = '';
+    document.getElementById('recipeImage').value = '';
+    document.getElementById('recipeNotes').value = '';
+    document.getElementById('cookingTime').value = '';
+    document.getElementById('ingredientsList').innerHTML = '';
+    addIngredient(); // 使用addIngredient确保有拖拽功能
+    const stepsTextareaClear = document.getElementById('stepsTextarea');
+    if (stepsTextareaClear) stepsTextareaClear.value = '';
+
+    // 3秒后清除成功消息
+    setTimeout(() => {
+        document.getElementById('adminMessage').innerHTML = '';
+    }, 3000);
+}
+
+// 加载管理员菜品列表
+function loadAdminRecipeList() {
+    const listDiv = document.getElementById('adminRecipeList');
+    if (!listDiv) return;
+
+    listDiv.innerHTML = '';
+    recipes.forEach(recipe => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding: 15px; background: white; margin-bottom: 10px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center;';
+        item.innerHTML = `
+            <div>
+                <strong>${recipe.name}</strong>
+                <span style="margin-left: 10px; color: #666;">${recipe.category}</span>
+            </div>
+            <div>
+                <button class="btn btn-primary" style="margin-right:10px;" onclick="editRecipe(${recipe.id})">编辑</button>
+                <button class="btn" style="background: #4CAF50; color: white; margin-right:10px;" onclick="duplicateRecipe(${recipe.id})">复制</button>
+                <button class="btn btn-remove" onclick="deleteRecipe(${recipe.id})">删除</button>
+            </div>
+        `;
+        listDiv.appendChild(item);
+    });
+}
+
+// 进入编辑模式
+function editRecipe(id) {
+    const r = recipes.find(x => x.id === id);
+    if (!r) return;
+    editingRecipeId = id;
+    document.getElementById('recipeName').value = r.name || '';
+    document.getElementById('recipeCategory').value = r.category || '主食';
+    document.getElementById('recipeImage').value = r.image || '';
+    document.getElementById('recipeNotes').value = r.notes || '';
+    document.getElementById('cookingTime').value = r.cookingTime || '';
+
+    // 配料
+    const ingContainer = document.getElementById('ingredientsList');
+    ingContainer.innerHTML = '';
+    (r.ingredients || []).forEach(ing => {
+        const div = document.createElement('div');
+        div.className = 'ingredient-input-group';
+        div.draggable = true;
+        div.setAttribute('data-ingredient-item', 'true');
+        const nameEscaped = (ing.name || '').replace(/"/g, '&quot;');
+        const amountEscaped = (ing.amount || '').replace(/"/g, '&quot;');
+        div.innerHTML = `
+            <span class="drag-handle" style="cursor: move; color: #999; margin-right: 8px; user-select: none;">⋮⋮</span>
+            <input type="text" class="form-control" value="${nameEscaped}">
+            <input type="text" class="form-control" value="${amountEscaped}">
+            <button class="btn btn-remove" onclick="removeIngredient(this)">删除</button>
+        `;
+        // 拖拽事件
+        div.addEventListener('dragstart', handleDragStart);
+        div.addEventListener('dragover', handleDragOver);
+        div.addEventListener('drop', handleDrop);
+        div.addEventListener('dragend', handleDragEnd);
+        ingContainer.appendChild(div);
+    });
+    if ((r.ingredients || []).length === 0) addIngredient();
+
+    // 步骤（单框回填）
+    const stepsTextarea = document.getElementById('stepsTextarea');
+    if (stepsTextarea) stepsTextarea.value = (r.steps || []).join('\n');
+
+    // 按钮文案/取消按钮
+    const saveBtn = document.querySelector('#admin .btn.btn-primary');
+    if (saveBtn) saveBtn.textContent = '保存修改';
+    let cancelBtn = document.getElementById('cancelEditBtn');
+    if (!cancelBtn) {
+        cancelBtn = document.createElement('button');
+        cancelBtn.id = 'cancelEditBtn';
+        cancelBtn.className = 'btn btn-remove';
+        cancelBtn.style.marginLeft = '10px';
+        cancelBtn.onclick = cancelEdit;
+        cancelBtn.textContent = '取消编辑';
+        saveBtn.parentElement.appendChild(cancelBtn);
+    } else {
+        cancelBtn.style.display = 'inline-block';
+    }
+}
+
+function cancelEdit() {
+    editingRecipeId = null;
+    document.getElementById('adminMessage').innerHTML = '';
+    document.getElementById('recipeName').value = '';
+    document.getElementById('recipeImage').value = '';
+    document.getElementById('recipeNotes').value = '';
+    document.getElementById('cookingTime').value = '';
+    document.getElementById('ingredientsList').innerHTML = '';
+    addIngredient(); // 使用addIngredient确保有拖拽功能
+    const stepsTextarea2 = document.getElementById('stepsTextarea');
+    if (stepsTextarea2) stepsTextarea2.value = '';
+    const saveBtn = document.querySelector('#admin .btn.btn-primary');
+    if (saveBtn) saveBtn.textContent = '保存菜品';
+    const cancelBtn = document.getElementById('cancelEditBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+}
+
+// 复制菜品
+function duplicateRecipe(id) {
+    const original = recipes.find(r => r.id === id);
+    if (!original) return;
+    
+    // 创建副本，新ID，名称加上（副本）
+    const duplicated = {
+        id: Date.now(),
+        name: `${original.name}（副本）`,
+        category: original.category || '主食',
+        image: original.image || '',
+        ingredients: JSON.parse(JSON.stringify(original.ingredients || [])),
+        steps: JSON.parse(JSON.stringify(original.steps || [])),
+        notes: original.notes || '',
+        cookingTime: original.cookingTime || 30
+    };
+    
+    // 保存到服务器或本地
+    if (isAdmin) {
+        fetch(`${API_BASE}/recipes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+            body: JSON.stringify(duplicated)
+        }).then(async resp => {
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.success && data.data) {
+                    recipes.push(data.data);
+                } else {
+                    recipes.push(duplicated);
+                }
+            } else {
+                recipes.push(duplicated);
+            }
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            loadRecipes();
+            loadAdminRecipeList();
+            document.getElementById('adminMessage').innerHTML = '<div class="success-message">菜品已复制！</div>';
+            setTimeout(() => {
+                document.getElementById('adminMessage').innerHTML = '';
+            }, 2000);
+        }).catch(() => {
+            recipes.push(duplicated);
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            loadRecipes();
+            loadAdminRecipeList();
+            document.getElementById('adminMessage').innerHTML = '<div class="success-message">菜品已复制（离线）</div>';
+            setTimeout(() => {
+                document.getElementById('adminMessage').innerHTML = '';
+            }, 2000);
+        });
+    } else {
+        recipes.push(duplicated);
+        localStorage.setItem('recipes', JSON.stringify(recipes));
+        loadRecipes();
+        loadAdminRecipeList();
+        document.getElementById('adminMessage').innerHTML = '<div class="success-message">菜品已复制（本地）</div>';
+        setTimeout(() => {
+            document.getElementById('adminMessage').innerHTML = '';
+        }, 2000);
+    }
+}
+
+// 删除菜品
+function deleteRecipe(id) {
+    if (confirm('确定要删除这个菜品吗？')) {
+        if (isAdmin) {
+            fetch(`${API_BASE}/recipes/${id}`, {
+                method: 'DELETE',
+                headers: { 'X-Admin-Token': ADMIN_TOKEN }
+            }).then(resp => {
+                // 无论成功失败，先本地删一遍，保证前端一致
+                recipes = recipes.filter(r => r.id !== id);
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+            }).catch(() => {
+                recipes = recipes.filter(r => r.id !== id);
+                localStorage.setItem('recipes', JSON.stringify(recipes));
+                loadRecipes();
+                loadAdminRecipeList();
+            });
+        } else {
+            recipes = recipes.filter(r => r.id !== id);
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            loadRecipes();
+            loadAdminRecipeList();
+        }
+    }
+}
+
+// 复制配方
+function copyRecipe() {
+    let text = `【${currentRecipe.name}】\n\n`;
+    text += '原材料：\n';
+    currentRecipe.ingredients.forEach(ing => {
+        text += `${ing.name}：${ing.amount}\n`;
+    });
+    text += '\n制作步骤：\n';
+    currentRecipe.steps.forEach((step, index) => {
+        const s = annotateIngredientsInPlain(step, currentRecipe.ingredients || []);
+        text += `${index + 1}. ${s}\n`;
+    });
+    if (currentRecipe.notes) {
+        text += `\n注意事项：${currentRecipe.notes}\n`;
+    }
+    text += `\n制作时间：${currentRecipe.cookingTime}分钟`;
+
+    // 复制到剪贴板
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+            alert('配方已复制到剪贴板！');
+        });
+    } else {
+        // 降级方案
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('配方已复制到剪贴板！');
+    }
+}
+
+// 打印配方（只打印当前弹出的详细菜品）
+function printRecipe() {
+    if (!currentRecipe) {
+        alert('请先打开一个菜品详情');
+        return;
+    }
+    
+    // 创建打印专用窗口，只包含当前菜品信息
+    const printWindow = window.open('', '_blank');
+    const recipe = currentRecipe;
+    
+    printWindow.document.write(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>${recipe.name} - 后门小吃出品手册</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            padding: 40px;
+            color: #333;
+            line-height: 1.6;
+        }
+        .print-header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #667eea;
+        }
+        .print-header h1 {
+            font-size: 2em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        .print-header .category {
+            color: #666;
+            font-size: 1.1em;
+        }
+        .print-section {
+            margin-bottom: 30px;
+        }
+        .print-section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .ingredient-list {
+            background: #f8f8f8;
+            padding: 20px;
+            border-radius: 10px;
+        }
+        .ingredient-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .ingredient-item:last-child {
+            border-bottom: none;
+        }
+        .ing-highlight { color: #39ff14; font-weight: 700; }
+        .ing-amount { color: #7b1fa2; font-weight: 700; margin-left: 2px; }
+        .step-item {
+            margin-bottom: 15px;
+            padding-left: 30px;
+            position: relative;
+        }
+        .step-item::before {
+            content: counter(step-counter);
+            counter-increment: step-counter;
+            position: absolute;
+            left: 0;
+            top: 0;
+            background: #667eea;
+            color: white;
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        .step-list {
+            counter-reset: step-counter;
+        }
+        .notes-box {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #ffc107;
+        }
+        .time-info {
+            text-align: center;
+            padding: 15px;
+            background: #e3f2fd;
+            border-radius: 10px;
+            font-size: 1.1em;
+            color: #1976d2;
+        }
+        @media print {
+            body {
+                padding: 20px;
+            }
+            .print-header {
+                page-break-after: avoid;
+            }
+            .print-section {
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="print-header">
+        <h1>${recipe.name}</h1>
+        <div class="category">${recipe.category}</div>
+    </div>
+    
+    <div class="print-section">
+        <h2>原材料</h2>
+        <div class="ingredient-list">
+    `);
+    
+    recipe.ingredients.forEach(ing => {
+        printWindow.document.write(`
+            <div class="ingredient-item">
+                <span>${ing.name}</span>
+                <strong>${ing.amount}</strong>
+            </div>
+        `);
+    });
+    
+    printWindow.document.write(`
+        </div>
+    </div>
+    
+    <div class="print-section">
+        <h2>制作步骤</h2>
+        <div class="step-list">
+    `);
+    
+    recipe.steps.forEach((step, index) => {
+        const html = highlightIngredientsInStep(step, recipe.ingredients || []);
+        printWindow.document.write(`
+            <div class="step-item">${html}</div>
+        `);
+    });
+    
+    printWindow.document.write(`
+        </div>
+    </div>
+    `);
+    
+    if (recipe.notes) {
+        printWindow.document.write(`
+    <div class="print-section">
+        <h2>注意事项</h2>
+        <div class="notes-box">${recipe.notes}</div>
+    </div>
+        `);
+    }
+    
+    printWindow.document.write(`
+    <div class="time-info">
+        制作时间：约 ${recipe.cookingTime} 分钟
+    </div>
+    
+    <div style="text-align: center; margin-top: 30px; color: #999; font-size: 0.9em;">
+        后门小吃出品手册 - https://chupin.ayakoai.com
+    </div>
+</body>
+</html>
+    `);
+    
+    printWindow.document.close();
+    
+    // 等待内容加载完成后打印
+    setTimeout(() => {
+        printWindow.print();
+        // 打印后可选择关闭窗口（用户可能想保留预览）
+        // printWindow.close();
+    }, 250);
+}
+
+// 分享配方
+// 已取消系统分享按钮功能（保留复制与打印、企业微信）
+
+// 发送到企业微信（参考“配方”项目 webhook 策略）
+function sendWecom() {
+    if (!currentRecipe) {
+        alert('请先打开一个菜品详情');
+        return;
+    }
+    if (wecomSending) return;
+    const ok = confirm(`将把【${currentRecipe.name}】发送到企业微信，确认发送吗？`);
+    if (!ok) return;
+    let text = `【${currentRecipe.name}】\n\n`;
+    text += '原材料：\n';
+    currentRecipe.ingredients.forEach(ing => {
+        text += `${ing.name}：${ing.amount}\n`;
+    });
+    text += '\n制作步骤：\n';
+    currentRecipe.steps.forEach((step, index) => {
+        const s = annotateIngredientsInPlain(step, currentRecipe.ingredients || []);
+        text += `${index + 1}. ${s}\n`;
+    });
+    if (currentRecipe.notes) {
+        text += `\n注意事项：${currentRecipe.notes}\n`;
+    }
+    text += `\n制作时间：${currentRecipe.cookingTime}分钟`;
+
+    wecomSending = true;
+    fetch(`${API_BASE}/send-webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            msgtype: 'text',
+            text: { content: text }
+        })
+    }).then(async resp => {
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok) {
+            alert('已发送到企业微信');
+        } else {
+            alert('发送失败：' + (data && data.message ? data.message : '未知错误'));
+        }
+    }).catch(() => alert('发送失败，网络错误')).finally(() => { wecomSending = false; });
+}
+
+// 页面加载时初始化
+window.onload = init;
+
+// 点击模态框外部关闭
+window.onclick = function(event) {
+    const modal = document.getElementById('recipeModal');
+    if (event.target === modal) {
+        closeModal();
+    }
+}
+
+
