@@ -1,79 +1,67 @@
-# 🍜 后门小吃出品手册
+# 后门小吃出品手册
 
-**标准化出品管理系统** — 后门小吃门店内部使用的菜品配方管理工具。
+餐饮门店标准化出品管理系统。菜品配方查询、制作步骤指引、原材料管理。
 
-线上地址：https://chupin.ayakoai.com
+## 线上地址
+
+https://chupin.ayakoai.com
 
 ## 功能
 
-- **📖 菜品查询** — 员工快速查看菜品配方、原材料用量、制作步骤
-- **⚙️ 管理后台** — 管理员登录后可新增/编辑/删除/复制菜品
-- **🏷️ 分类管理** — 自定义菜品分类（主食、小菜、汤品等）
-- **📋 一键复制** — 配方文本一键复制到剪贴板
-- **🖨️ 打印** — 单道菜品打印友好页面
-- **💬 企业微信** — 一键推送配方到后门小吃企业微信群
-- **🔍 搜索** — 按菜名或分类快速过滤
-- **📱 移动端适配** — 手机端友好，员工可随时查阅
+### 菜品查询
+- 搜索菜品名称
+- 点击查看详情（原材料清单、制作步骤、注意事项、制作时间）
+- 食材名称和用量在步骤中高亮显示
+- 复制配方 / 打印 / 发送企业微信
 
-## 技术栈
+### 管理后台
+- 菜品增删改查
+- 分类管理（主食/小菜/汤品/饮品/特色菜）
+- 原材料拖拽排序
+- 菜品复制功能
+- 密码登录认证
 
-- **前端：** 纯 HTML + CSS + JavaScript（无框架），移动端优先响应式设计
-- **后端：** Node.js 原生 HTTP Server（无框架），PM2 进程管理
-- **数据存储：** JSON 文件（`recipes.json` / `categories.json`）
-- **反向代理：** Nginx（`/api/` → `127.0.0.1:3000`）
-- **部署：** 腾讯云轻量服务器，Let's Encrypt SSL
+## 技术架构
 
-## 项目结构
+- **前端：** 原生 HTML + CSS + JavaScript（零依赖，无构建步骤）
+- **后端：** Node.js（Express）
+- **数据：** JSON 文件存储（recipes.json / categories.json）
+- **部署：** 莱卡云服务器 + Nginx + Let's Encrypt SSL
+- **设计：** 浅色清爽风格，绿色主色调（#2d7a3a），SVG 图标
 
-```
-├── index.html          # 前端主页面
-├── assets/
-│   ├── css/style.css   # 样式
-│   └── js/app.js       # 前端逻辑
-├── chupin-api.js       # Node.js 后端 API
-├── recipes.json        # 菜品数据
-├── categories.json     # 分类数据
-├── version.json        # 前端版本号
-├── start-api.sh        # 启动脚本
-├── stop-api.sh         # 停止脚本
-├── restart-api.sh      # 重启脚本
-└── README.md           # 本文件
-```
+## 设计规范
 
-## API
+本项目使用统一的绿色清爽设计体系，与成本计算器（cost.shangfei.shop）风格一致：
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| GET | `/api/recipes` | 获取所有菜品 | 无 |
-| POST | `/api/recipes` | 新增菜品 | X-Admin-Token |
-| PUT | `/api/recipes/:id` | 更新菜品 | X-Admin-Token |
-| DELETE | `/api/recipes/:id` | 删除菜品 | X-Admin-Token |
-| GET | `/api/categories` | 获取分类列表 | 无 |
-| POST | `/api/categories` | 新增分类 | X-Admin-Token |
-| DELETE | `/api/categories/:name` | 删除分类 | X-Admin-Token |
-| POST | `/api/send-webhook` | 推送到企业微信 | 无 |
-| GET | `/api/health` | 健康检查 | 无 |
+| 元素 | 值 |
+|------|-----|
+| 主色 | #2d7a3a |
+| 主色浅 | #3d9e4d |
+| 主色背景 | #eaf5ec |
+| 页面背景 | #f5f7f5 |
+| 卡片背景 | #ffffff |
+| 边框 | #e2e8e4 |
+| 正文色 | #1a2e1a |
+| 辅助文字 | #6b7c6b |
+| 弱化文字 | #9ca89c |
+| 成功 | #22c55e |
+| 警告 | #f59e0b |
+| 错误 | #ef4444 |
+| 信息 | #3b82f6 |
+| 圆角（卡片） | 14-16px |
+| 圆角（按钮） | 12px |
+| 圆角（Tab） | 20px |
+| 圆角（输入框） | 10-12px |
+| 字体 | -apple-system, PingFang SC, sans-serif |
 
-## 运维
+## 版本历史
 
-```bash
-# 启动后端（PM2）
-pm2 start chupin-api.js --name chupin-api
-pm2 save
+### v004 (2026-04-06)
+- UI 全面改版：紫色渐变 → 浅色绿色清爽风格
+- Emoji 替换为 SVG 图标
+- 移动端性能优化
+- 新增菜品：大宝宝鸡腿饭、照烧鸡块饭
 
-# 查看日志
-pm2 logs chupin-api
-
-# 重启
-pm2 restart chupin-api
-```
-
-## 更新日志
-
-- **v003 (2026-04-01)** — 管理后台重构：拆分为菜品列表/添加编辑/分类管理三个子页面；按分类分组展示；新增 6 道夏季菜品（凉面系列、手枪腿、鸡块串）
-- **v002 (2025-11-01)** — 前端初始化修复，API 优先加载，PM2 进程管理
-- **v001 (2025-10-29)** — 初始版本，基础 CRUD 功能
-
----
-
-后门小吃 · 内部工具
+### v003 (2026-04-01)
+- 管理后台重构
+- 新增 6 道夏季菜品
