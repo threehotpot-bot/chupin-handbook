@@ -1,5 +1,42 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-:root { color-scheme: light; }
+:root {
+  color-scheme: light;
+
+  /* ── 扩展 token（同步自 design-system v1.1，2026-04-13）── */
+
+  /* 动效曲线 */
+  --ease-out-cubic: cubic-bezier(0.33, 1, 0.68, 1);
+  --ease-in-out-cubic: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.5, 1.5, 0.5, 1);
+  --ease-emphasis: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 响应式断点 */
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+  --bp-xl: 1280px;
+
+  /* 焦点可见性 */
+  --focus-ring-keyboard: 0 0 0 3px rgba(45, 122, 58, 0.5);
+  --focus-ring-click: 0 0 0 3px rgba(45, 122, 58, 0.15);
+
+  /* 表单状态 */
+  --color-disabled: #c4cbc4;
+  --color-disabled-bg: #f0f2f0;
+  --opacity-disabled: 0.55;
+
+  /* 图片比例 */
+  --aspect-square: 1 / 1;
+  --aspect-video: 16 / 9;
+  --aspect-4-3: 4 / 3;
+  --aspect-portrait: 3 / 4;
+
+  /* Toast */
+  --toast-position-top: 16px;
+  --toast-position-right: 16px;
+  --toast-gap: 8px;
+  --toast-max-width: 360px;
+}
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
